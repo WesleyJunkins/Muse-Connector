@@ -154,8 +154,41 @@ var Physio = function () {
     var theta = getBandPower(channel, "theta");
     var alpha = getBandPower(channel, "alpha");
     var beta = getBandPower(channel, "beta");
-    var gamma = getBandPower(channel, "beta");
-    return target / (delta + theta + alpha + beta + gamma);
+    var gamma = getBandPower(channel, "gamma");
+    var sum = delta + theta + alpha + beta + gamma;
+    return sum > 0 ? target / sum : 0;
+  };
+
+  /**
+   * Computes a 0-1 focus/engagement score from all four Muse channels using:
+   * (1) Average relative beta across TP9, TP10, AF7, AF8 (alertness/active thinking),
+   * (2) Theta/beta component: beta/(theta+beta) averaged across channels (lower theta vs beta = more focus),
+   * (3) Alpha blocking: 1 - average relative alpha (lower alpha when mentally engaged).
+   * Sets window.relativeBeta to this score (used as powerValue * 100 in UI/MQTT) and window.focusComponents.
+   */
+  var computeFocusScore = function () {
+    if (!window.bands || !window.bands.tp9 || !window.bands.tp10 || !window.bands.af7 || !window.bands.af8) {
+      return;
+    }
+    var electrodes = ["tp9", "tp10", "af7", "af8"];
+    var sumBeta = 0, sumThetaBeta = 0, sumAlpha = 0;
+    for (var i = 0; i < electrodes.length; i++) {
+      var b = window.bands[electrodes[i]];
+      sumBeta += b.beta;
+      var theta = b.theta, beta = b.beta;
+      sumThetaBeta += (theta + beta) > 0 ? beta / (theta + beta) : 0;
+      sumAlpha += b.alpha;
+    }
+    var avgRelativeBeta = sumBeta / 4;
+    var thetaBetaComponent = sumThetaBeta / 4;
+    var alphaBlockingComponent = 1 - (sumAlpha / 4);
+    window.focusComponents = {
+      avgRelativeBeta: avgRelativeBeta,
+      thetaBetaComponent: thetaBetaComponent,
+      alphaBlockingComponent: alphaBlockingComponent
+    };
+    var focus = (avgRelativeBeta + thetaBetaComponent + alphaBlockingComponent) / 3;
+    window.relativeBeta = Math.max(0, Math.min(1, focus));
   };
 
   /** When all four channels have new data, compute band powers for tp9/tp10/af7/af8 and optionally refresh bpGraph/psdGraph if they exist. */
@@ -205,6 +238,8 @@ var Physio = function () {
       totalPower = delta + theta + alpha + beta + gamma;
       window.bands["af7"] = { delta, theta, alpha, beta, gamma, totalPower };
 
+      computeFocusScore();
+
       if (window.bpGraph) {
         var tp9Data = [{ x: 0, y: theta }, { x: 1, y: alpha }, { x: 2, y: beta }, { x: 3, y: gamma }];
         window.bpGraph.series[0].data = tp9Data;
@@ -238,7 +273,6 @@ var Physio = function () {
   this.device = new Blue.BCIDevice((sample) => {
     let { electrode, data } = sample;
     this.addData(data, electrode);
-    window.relativeBeta = getRelativeBandPower(2, "beta");
     checkForVisualizationRefresh();
   });
 

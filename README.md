@@ -4,7 +4,60 @@
 
 The Muse Headset Connector is a web application that connects to a Muse EEG headset via the browser's Web Bluetooth API, processes the raw EEG signal into frequency band powers (delta, theta, alpha, beta, gamma) for each electrode, and streams both raw samples and processed data to an MQTT broker. Other applications can subscribe to the configured MQTT topic to receive real-time EEG data for analysis, visualization, or control.
 
-The user must first connect to an MQTT broker (e.g. HiveMQ Cloud) using the on-page form, then click "Connect to Muse" to pair with the headset. Once connected, the page displays live band powers and relative beta for the four electrodes (TP9, TP10, AF7, AF8) and publishes batched data to MQTT at a configurable rate. The page also provides links to external modules (Quick Diagnostic, Average Bandpower, PSD, PSD Spectrogram) that open in separate windows.
+The user must first connect to an MQTT broker (e.g. HiveMQ Cloud) using the on-page form, then click "Connect to Muse" to pair with the headset. Once connected, the page displays a focus/engagement score (powerValue) derived from all four electrodes using relative beta, theta/beta ratio, and alpha blocking, plus per-electrode band powers (TP9, TP10, AF7, AF8), and publishes batched data to MQTT at a configurable rate. The page also provides links to external modules (Quick Diagnostic, Average Bandpower, PSD, PSD Spectrogram) that open in separate windows.
+
+---
+
+## How powerValue Is Computed
+
+powerValue is the main focus/engagement metric sent to MQTT and shown in the UI. It is a number from 0 to 100 (formatted to 3 decimal places) derived from all four Muse channels (TP9, TP10, AF7, AF8) using relative band powers and three sub-scores.
+
+**Final formula**
+
+- Focus score (0 to 1):
+  - `focus = clamp( (avgRelativeBeta + thetaBetaComponent + alphaBlockingComponent) / 3 , 0 , 1 )`
+- powerValue (string, 0 to 100):
+  - `powerValue = (focus * 100).toFixed(3)`
+
+So powerValue is the focus score scaled to a percentage and rounded to 3 decimals. Higher values indicate higher estimated focus/engagement.
+
+**Relative band power (used in all components)**
+
+For each electrode and each band (delta, theta, alpha, beta, gamma), the code first computes absolute band power from the filtered EEG, then relative band power:
+
+- `relativeBand = bandPower / (delta + theta + alpha + beta + gamma)` for that channel.
+
+So for each channel, the five relative band powers sum to 1. These values are stored in `window.bands` (e.g. `bands.tp9.beta`, `bands.af7.alpha`).
+
+**Component 1: avgRelativeBeta**
+
+- Formula: `avgRelativeBeta = (beta_tp9 + beta_tp10 + beta_af7 + beta_af8) / 4`
+- Each `beta_*` is the relative beta power for that electrode (beta / total power for that channel).
+- Interpretation: Higher beta is often associated with alertness and active thinking; averaging over all four channels gives a global beta contribution to the focus score.
+
+**Component 2: thetaBetaComponent**
+
+- Per channel: `beta / (theta + beta)` (if `theta + beta > 0`; otherwise 0). Then average over the four channels:
+  - `thetaBetaComponent = (1/4) * sum over tp9,tp10,af7,af8 of [ beta / (theta + beta) ]`
+- Interpretation: When beta is large relative to theta, this ratio is high; when theta dominates, it is low. The component is used as a simple attention/focus index (higher = more beta relative to theta, often associated with focused states).
+
+**Component 3: alphaBlockingComponent**
+
+- Formula: `alphaBlockingComponent = 1 - (alpha_tp9 + alpha_tp10 + alpha_af7 + alpha_af8) / 4`
+- So it is `1` minus the average relative alpha across the four channels.
+- Interpretation: When the user is more mentally engaged, alpha often decreases (“alpha blocking”). So higher values of this component (lower alpha) correspond to higher estimated engagement.
+
+**Summary**
+
+| Symbol | Formula | Range |
+|--------|---------|--------|
+| avgRelativeBeta | Mean of relative beta over TP9, TP10, AF7, AF8 | 0 to 1 |
+| thetaBetaComponent | Mean over channels of beta/(theta + beta) | 0 to 1 |
+| alphaBlockingComponent | 1 minus mean of relative alpha over the four channels | 0 to 1 |
+| focus | (avgRelativeBeta + thetaBetaComponent + alphaBlockingComponent) / 3, clamped to [0, 1] | 0 to 1 |
+| powerValue | (focus * 100).toFixed(3) | "0.000" to "100.000" |
+
+These three components are exposed in the UI and in MQTT as `processedData.focusComponents` (avgRelativeBeta, thetaBetaComponent, alphaBlockingComponent).
 
 ---
 
@@ -50,8 +103,9 @@ Each message published to the configured MQTT topic is a single JSON string. Aft
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `relativeBeta` | number | Relative beta power for channel 2 (TP9): beta / (delta + theta + alpha + beta + gamma). |
-| `powerValue` | string | Same as `relativeBeta` multiplied by 100, formatted to 3 decimal places (e.g. `"12.345"`). |
+| `relativeBeta` | number | Focus/engagement score 0-1: average of (1) avg relative beta across all 4 channels, (2) theta/beta component beta/(theta+beta), (3) alpha blocking 1-avg(relative alpha). |
+| `powerValue` | string | Focus score multiplied by 100, 3 decimal places (e.g. `"45.123"`). Higher = more engaged/focused. |
+| `focusComponents` | object or null | Breakdown: `avgRelativeBeta`, `thetaBetaComponent`, `alphaBlockingComponent` (each 0-1). |
 | `bands` | object | Per-electrode relative band powers; keys are `"tp9"`, `"tp10"`, `"af7"`, `"af8"`. |
 
 **Each electrode in `processedData.bands`** (e.g. `processedData.bands.tp9`)
@@ -81,8 +135,13 @@ Each message published to the configured MQTT topic is a single JSON string. Aft
     }
   ],
   "processedData": {
-    "relativeBeta": 0.123,
-    "powerValue": "12.300",
+    "relativeBeta": 0.451,
+    "powerValue": "45.100",
+    "focusComponents": {
+      "avgRelativeBeta": 0.20,
+      "thetaBetaComponent": 0.55,
+      "alphaBlockingComponent": 0.60
+    },
     "bands": {
       "tp9": { "delta": 0.2, "theta": 0.15, "alpha": 0.25, "beta": 0.2, "gamma": 0.2, "totalPower": 1.0 },
       "tp10": { "delta": 0.22, "theta": 0.14, "alpha": 0.24, "beta": 0.21, "gamma": 0.19, "totalPower": 1.0 },
@@ -110,7 +169,7 @@ Messages are published at the rate controlled by `MQTT_UPDATE_INTERVAL` in index
   - Two status divs: `#mqttStatus` and `#museStatus`, toggled between "connected" and "disconnected" classes.
   - MQTT config: protocol (WSS/WS), broker URL, port, username, password, topic; buttons "Connect to MQTT" and "Connect to Muse".
   - Modules section: buttons that open external pages (Quick Diagnostic, Average Bandpower, PSD, PSD Spectrogram) in new windows.
-  - Data display: `#latestData` (a `<pre>`) is replaced with generated HTML showing timestamp, relative beta, power value, and per-electrode band powers (TP9, TP10, AF7, AF8).
+  - Data display: `#latestData` (a `<pre>`) is replaced with generated HTML showing timestamp, focus score (0-1), focus % (powerValue), optional focus components (avg relative beta, theta/beta component, alpha blocking), and per-electrode band powers (TP9, TP10, AF7, AF8).
 
 - **Script (DOMContentLoaded)**
   1. **Setup**
@@ -178,11 +237,14 @@ Messages are published at the rate controlled by `MQTT_UPDATE_INTERVAL` in index
   - **getRelativeBandPower(channel, band)**
     - Target band power divided by the sum of delta, theta, alpha, beta, and gamma band powers for that channel.
 
+  - **computeFocusScore()**
+    - After bands are filled, computes a 0-1 focus/engagement score from all four channels: (1) average relative beta, (2) theta/beta component (beta/(theta+beta) per channel, averaged), (3) alpha blocking (1 - average relative alpha). Sets `window.relativeBeta` to the combined score (clamped 0-1) and `window.focusComponents` to the three components.
+
   - **checkForVisualizationRefresh()**
-    - When all four channels (2, 16, 3, 17) are ready, reset their ready flags, then for each electrode (2->tp9, 3->tp10, 17->af8, 16->af7) compute relative band powers and set `window.bands["tp9"]` etc. with delta, theta, alpha, beta, gamma, totalPower. If `window.bpGraph` exists, update its series with band power data and call `update()`. If `window.psdGraph` and PSD data exist, fill series from `window.psd[2/3/16/17]` via `psdToPlotPSD` and call `update()`.
+    - When all four channels (2, 16, 3, 17) are ready, reset their ready flags, then for each electrode (2->tp9, 3->tp10, 17->af8, 16->af7) compute relative band powers and set `window.bands["tp9"]` etc. with delta, theta, alpha, beta, gamma, totalPower. Calls `computeFocusScore()`. If `window.bpGraph` exists, update its series with band power data and call `update()`. If `window.psdGraph` and PSD data exist, fill series from `window.psd[2/3/16/17]` via `psdToPlotPSD` and call `update()`.
 
   - **Device and start**
-    - `this.device = new Blue.BCIDevice(callback)`. The callback receives `sample` with `electrode` and `data`, calls `this.addData(data, electrode)`, sets `window.relativeBeta = getRelativeBandPower(2, "beta")`, and calls `checkForVisualizationRefresh()`.
+    - `this.device = new Blue.BCIDevice(callback)`. The callback receives `sample` with `electrode` and `data`, calls `this.addData(data, electrode)`, and calls `checkForVisualizationRefresh()` (which updates band powers and then `computeFocusScore()`, setting `window.relativeBeta` to the focus score).
     - `this.start()` calls `this.device.connect()` to begin Web Bluetooth connection and streaming.
 
 ### js/BCIDevice.build.js

@@ -738,6 +738,7 @@
                                         processedData: {
                                             relativeBeta: window.relativeBeta,
                                             powerValue: (window.relativeBeta * 100).toFixed(3),
+                                            focusComponents: window.focusComponents || null,
                                             bands: window.bands
                                         }
                                     };
@@ -752,13 +753,13 @@
                                 }
                             }
 
-                            // If enough time has passed, refresh the "Latest Data" section with current relative beta and band powers
+                            // If enough time has passed, refresh the "Latest Data" section with focus score and band powers
                             if (currentTime - lastDomUpdateTime >= DOM_UPDATE_INTERVAL) {
-                                const betaValue = window.relativeBeta;
+                                const focusScore = window.relativeBeta;
                                 const bands = window.bands;
 
-                                if (betaValue !== undefined) {
-                                    const powerValue = (betaValue * 100).toFixed(3);
+                                if (focusScore !== undefined) {
+                                    const powerValue = (focusScore * 100).toFixed(3);
                                     const formatBandValue = (value) => {
                                         return value !== undefined ? value.toFixed(4) : 'N/A';
                                     };
@@ -775,8 +776,9 @@
 
                                     const displayData = {
                                         timestamp: new Date().toISOString(),
-                                        relativeBeta: betaValue.toFixed(4),
+                                        relativeBeta: focusScore.toFixed(4),
                                         powerValue: powerValue,
+                                        focusComponents: window.focusComponents || null,
                                         bands: hasValidBands ? {
                                             tp9: {
                                                 delta: formatBandValue(bands.tp9?.delta),
@@ -849,13 +851,14 @@
                                     <span class="data-value">${data.timestamp}</span>
                                 </div>
                                 <div class="data-item">
-                                    <span class="data-label">Relative Beta</span>
+                                    <span class="data-label">Focus score (0-1)</span>
                                     <span class="data-value">${data.relativeBeta}</span>
                                 </div>
                                 <div class="data-item">
-                                    <span class="data-label">Power Value</span>
+                                    <span class="data-label">Focus % (powerValue)</span>
                                     <span class="data-value">${data.powerValue}%</span>
                                 </div>
+                                ${data.focusComponents ? '<div class="data-item"><span class="data-label">Avg relative beta</span><span class="data-value">' + (data.focusComponents.avgRelativeBeta != null ? data.focusComponents.avgRelativeBeta.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Theta/beta component</span><span class="data-value">' + (data.focusComponents.thetaBetaComponent != null ? data.focusComponents.thetaBetaComponent.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Alpha blocking</span><span class="data-value">' + (data.focusComponents.alphaBlockingComponent != null ? data.focusComponents.alphaBlockingComponent.toFixed(4) : 'N/A') + '</span></div>' : ''}
                             </div>
                             <div class="data-section">
                                 <div class="data-section-title">TP9</div>
