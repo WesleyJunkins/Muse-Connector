@@ -1,19 +1,26 @@
-/** Class used to manage physiological data
+/**
+ * Physio - Manages physiological (EEG) data from the Muse headset.
+ * Buffers samples per channel, applies a bandpass filter, computes PSD and band powers
+ * (delta, theta, alpha, beta, gamma) for each electrode, and exposes data for MQTT and UI.
  * @class
  */
 
 var Physio = function () {
+  // General buffer (legacy); not used for MQTT
   this.buffer = [];
-  this.rawDataBuffer = []; // Buffer for raw data samples
-  this.maxBufferSize = 256; // Store 1 second of data at 256 Hz
+  // Accumulates raw samples for the last second; consumed by index.html and sent over MQTT in batches
+  this.rawDataBuffer = [];
+  // Cap on rawDataBuffer length: 1 second of data at 256 Hz
+  this.maxBufferSize = 256;
   this.lastSampleTime = 0;
   this.sampleCount = 0;
   this.lastSecondTime = 0;
-  this.samplesPerPacket = 12; // Number of samples per packet from Muse device
+  // Muse sends 12 samples per packet per channel
+  this.samplesPerPacket = 12;
 
-  //channels 2,16,3,17
+  // Muse channel IDs: 2 = TP9, 16 = AF7, 3 = TP10, 17 = AF8
 
-  // Set up filter
+  // Bandpass filter (7-30 Hz) for focusing on relevant EEG bands; 250 Hz sample rate, 128-tap FIR
   sampleRate = 250;
   lowFreq = 7;
   highFreq = 30;
@@ -27,30 +34,35 @@ var Physio = function () {
   });
   filter = new Fili.FirFilter(coeffs);
 
+  // Per-channel sample arrays; keys are channel IDs (2, 16, 3, 17)
   channels = {};
+  // Power spectral density per channel; populated for PSD visualizations
   window.psd = {};
+  // Relative band powers per electrode (tp9, tp10, af7, af8); used by UI and MQTT
   window.bands = {};
   tempSeriesData = {};
+  // Flags indicating whether each channel has received new data in the current refresh cycle
   isChannelDataReady = { 2: false, 16: false, 3: false, 17: false };
+  // Number of seconds of data kept per channel for PSD/band power computation
   this.SECONDS = 4;
 
   window.channelSampleCount = {};
+  // Total samples per channel buffer: 4 seconds * 256 Hz
   this.BUFFER_SIZE = this.SECONDS * 256;
   this.isConnected = false;
 
+  /**
+   * Adds a packet of samples for one channel: appends to channel buffer, pushes raw samples
+   * into rawDataBuffer (for MQTT), and marks the channel as ready for band power refresh.
+   */
   this.addData = (sample, channel) => {
     const currentTime = Date.now();
-    
-    // Track timing
+
     if (this.lastSampleTime === 0) {
       this.lastSampleTime = currentTime;
       this.lastSecondTime = currentTime;
     }
-    
-    // Count samples
-    this.sampleCount += sample.length; // Count all samples in the packet
-    
-    // Reset counter every second
+    this.sampleCount += sample.length;
     if (currentTime - this.lastSecondTime >= 1000) {
       this.sampleCount = 0;
       this.lastSecondTime = currentTime;
@@ -61,27 +73,23 @@ var Physio = function () {
       window.channelSampleCount[channel] = 0;
     }
 
-    // Process each sample in the packet
     for (let i = 0; i < sample.length; i++) {
-      // Add sample to channel buffer
+      // Maintain a sliding window of BUFFER_SIZE samples per channel (oldest removed)
       if (channels[channel].length > this.BUFFER_SIZE - 1) {
         channels[channel].shift();
       }
       channels[channel].push(sample[i]);
       window.channelSampleCount[channel] = window.channelSampleCount[channel] + 1;
 
-      // Store individual raw data sample
+      // One raw sample object per value for MQTT; capped at maxBufferSize
       const rawSample = {
         timestamp: new Date().toISOString(),
         channel: channel,
-        data: [sample[i]], // Store single sample
+        data: [sample[i]],
         sampleNumber: this.sampleCount + i,
         packetSize: 1
       };
-      
       this.rawDataBuffer.push(rawSample);
-      
-      // Keep only the last second of data
       if (this.rawDataBuffer.length > this.maxBufferSize) {
         this.rawDataBuffer.shift();
       }
@@ -99,19 +107,20 @@ var Physio = function () {
     return this.buffer;
   };
 
+  /** Returns the array of raw samples (used by index.html to publish to MQTT). */
   this.getRawDataBuffer = () => {
     return this.rawDataBuffer;
   };
 
+  /** Clears the raw sample buffer after sending to MQTT to avoid re-sending the same data. */
   this.clearRawDataBuffer = () => {
     this.rawDataBuffer = [];
   };
 
+  /** Converts PSD array to plot format: array of { x: frequency index, y: power } up to max frequency index. */
   psdToPlotPSD = function (psd, max) {
-    //console.log(psdToPlotPSD)
     out = [];
     for (i in psd) {
-      //console.log(psd[i])
       out.push({ x: parseInt(i), y: psd[i] });
       if (i > max) {
         return out;
@@ -119,6 +128,7 @@ var Physio = function () {
     }
   };
 
+  /** Computes absolute band power for one channel and band (delta/theta/alpha/beta/gamma). Uses filtered signal and BCI PSD/band power. */
   var getBandPower = (channel, band) => {
     if (!channels[channel]) return 0;
 
@@ -137,6 +147,7 @@ var Physio = function () {
     return bp;
   };
 
+  /** Relative band power: target band power divided by sum of all band powers for that channel. */
   var getRelativeBandPower = (channel, band) => {
     var target = getBandPower(channel, band);
     var delta = getBandPower(channel, "delta");
@@ -147,6 +158,7 @@ var Physio = function () {
     return target / (delta + theta + alpha + beta + gamma);
   };
 
+  /** When all four channels have new data, compute band powers for tp9/tp10/af7/af8 and optionally refresh bpGraph/psdGraph if they exist. */
   var checkForVisualizationRefresh = function () {
     if (
       isChannelDataReady[2] &&
@@ -160,8 +172,7 @@ var Physio = function () {
       isChannelDataReady[16] = false;
       isChannelDataReady[17] = false;
 
-      // Calculate band powers regardless of visualization
-      // tp9
+      // Compute relative band powers for each electrode (channel 2 = TP9, 3 = TP10, 16 = AF7, 17 = AF8)
       delta = getRelativeBandPower(2, "delta");
       theta = getRelativeBandPower(2, "theta");
       alpha = getRelativeBandPower(2, "alpha");
@@ -170,7 +181,6 @@ var Physio = function () {
       totalPower = delta + theta + alpha + beta + gamma;
       window.bands["tp9"] = { delta, theta, alpha, beta, gamma, totalPower };
 
-      // tp10
       delta = getRelativeBandPower(3, "delta");
       theta = getRelativeBandPower(3, "theta");
       alpha = getRelativeBandPower(3, "alpha");
@@ -179,7 +189,6 @@ var Physio = function () {
       totalPower = delta + theta + alpha + beta + gamma;
       window.bands["tp10"] = { delta, theta, alpha, beta, gamma, totalPower };
 
-      // AF8
       delta = getRelativeBandPower(17, "delta");
       theta = getRelativeBandPower(17, "theta");
       alpha = getRelativeBandPower(17, "alpha");
@@ -188,7 +197,6 @@ var Physio = function () {
       totalPower = delta + theta + alpha + beta + gamma;
       window.bands["af8"] = { delta, theta, alpha, beta, gamma, totalPower };
 
-      // AF7
       delta = getRelativeBandPower(16, "delta");
       theta = getRelativeBandPower(16, "theta");
       alpha = getRelativeBandPower(16, "alpha");
@@ -197,9 +205,7 @@ var Physio = function () {
       totalPower = delta + theta + alpha + beta + gamma;
       window.bands["af7"] = { delta, theta, alpha, beta, gamma, totalPower };
 
-      // Only update visualizations if the graphs exist
       if (window.bpGraph) {
-        // Update band power graph
         var tp9Data = [{ x: 0, y: theta }, { x: 1, y: alpha }, { x: 2, y: beta }, { x: 3, y: gamma }];
         window.bpGraph.series[0].data = tp9Data;
 
@@ -214,21 +220,13 @@ var Physio = function () {
         window.bpGraph.update();
       }
 
-      // Update PSD graph if it exists
       if (window.psdGraph && window.psd[2] && window.psd[3]) {
-        //tp9
         psdPlotData = psdToPlotPSD(window.psd[2], 120);
         window.psdGraph.series[0].data = psdPlotData;
-
-        //tp10
         psdPlotData = psdToPlotPSD(window.psd[3], 120);
         window.psdGraph.series[1].data = psdPlotData;
-
-        //af7
         psdPlotData = psdToPlotPSD(window.psd[16], 120);
         window.psdGraph.series[2].data = psdPlotData;
-
-        //af8
         psdPlotData = psdToPlotPSD(window.psd[17], 120);
         window.psdGraph.series[3].data = psdPlotData;
         window.psdGraph.update();
@@ -236,6 +234,7 @@ var Physio = function () {
     }
   };
 
+  // BCIDevice (from BCIDevice.build.js) connects via Web Bluetooth and invokes this callback with { electrode, data } per packet
   this.device = new Blue.BCIDevice((sample) => {
     let { electrode, data } = sample;
     this.addData(data, electrode);
@@ -243,14 +242,10 @@ var Physio = function () {
     checkForVisualizationRefresh();
   });
 
+  /** Initiates Web Bluetooth connection to the Muse device and starts streaming EEG data. */
   this.start = () => {
     this.device.connect();
   };
 
   return this;
 };
-
-// document.getElementById("bluetooth").onclick = function (e) {
-//   var physio = new Physio();
-//   physio.start();
-// };

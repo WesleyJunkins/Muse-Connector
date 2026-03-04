@@ -1,20 +1,34 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
+<!--
+    Muse Headset Connector - Main application page.
+    Connects to a Muse EEG headset via Web Bluetooth, processes EEG data into band powers,
+    and streams raw and processed data to an MQTT broker for use by other applications.
+-->
 
 <head>
+    <!-- Page title shown in the browser tab -->
     <title>Muse Headset Connector</title>
+    <!-- MQTT client library for publishing EEG data to a message broker -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <!-- Fili.js: digital filter library used for bandpass filtering of EEG signals -->
     <script src="js/fili.min.js"></script>
+    <!-- BCI.js: signal processing (PSD, band power calculations) for EEG -->
     <script src="js/bci.min.js"></script>
+    <!-- BCIDevice: Web Bluetooth wrapper for connecting to the Muse headset and receiving EEG packets -->
     <script src="js/BCIDevice.build.js"></script>
+    <!-- Physio: application logic for buffering samples, computing band powers, and managing the BCI device -->
     <script src="js/physio.js"></script>
     <style>
+        /* CSS custom properties for consistent theming across the page */
         :root {
             --primary-color: #0066cc;
             --secondary-color: #ADD8E6;
             --accent-color: #00ff00;
         }
 
+        /* Main page layout: centered content, gradient background, full viewport height */
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
             max-width: 800px;
@@ -34,6 +48,7 @@
             float: right;
         }
 
+        /* Base style for status message boxes (MQTT and Muse connection status) */
         .status {
             margin: 20px 0;
             padding: 15px;
@@ -42,12 +57,14 @@
             border: 1px solid rgba(0, 0, 0, 0.1);
         }
 
+        /* Green styling when a connection (MQTT or Muse) is active */
         .connected {
             background-color: #d4edda;
             color: #155724;
             border-left: 4px solid var(--accent-color);
         }
 
+        /* Red styling when a connection is not established */
         .disconnected {
             background-color: #f8d7da;
             color: #721c24;
@@ -425,21 +442,26 @@
 </head>
 
 <body>
+    <!-- Main page heading -->
     <h1>Muse Headset Connector</h1>
-    
+
+    <!-- Animated spinner and text showing current connection/search state -->
     <div class="connection-status">
         <div class="spinner"></div>
         <div class="status-text" id="connectionStatusText">Searching for MQTT...</div>
     </div>
-    
+
+    <!-- MQTT broker connection status; class toggled between connected/disconnected for styling -->
     <div id="mqttStatus" class="status disconnected">
         MQTT: Disconnected
     </div>
-    
+
+    <!-- Muse headset Bluetooth connection status -->
     <div id="museStatus" class="status disconnected">
         Muse: Disconnected
     </div>
 
+    <!-- MQTT broker configuration form: protocol, URL, port, credentials, and topic -->
     <div class="mqtt-config">
         <h3>Connection Setup</h3>
         <div class="config-grid">
@@ -471,12 +493,14 @@
                 <input type="text" id="topic" placeholder="bdrxr/connectorToWeb">
             </div>
         </div>
+        <!-- Connect to MQTT first; then Connect to Muse to start streaming EEG to the broker -->
         <div class="button-container">
             <button id="mqttConnectButton">Connect to MQTT</button>
             <button id="connectButton">Connect to Muse</button>
         </div>
     </div>
 
+    <!-- Links to external module pages (Quick Diagnostic, Bandpower, PSD, Spectrogram) opened in popup windows -->
     <div class="modules-section">
         <h3>Modules</h3>
         <div class="modules-grid">
@@ -495,11 +519,13 @@
         </div>
     </div>
 
+    <!-- Live display of latest processed EEG data: timestamp, relative beta, power value, and band powers per channel -->
     <div class="data-display">
         <h3>Latest Data:</h3>
         <pre id="latestData">No data yet</pre>
     </div>
 
+    <!-- Decorative background image -->
     <img src="assets/net.png" alt="Network Connection" class="network-image">
 
     <div class="wave-container">
@@ -511,15 +537,16 @@
     </div>
 
     <script>
+        // Run application logic only after the DOM is fully loaded so all elements exist
         document.addEventListener("DOMContentLoaded", function () {
-            // Check if MQTT is loaded
+            // Ensure the MQTT library was loaded from CDN; show error and exit if not
             if (typeof mqtt === 'undefined') {
                 console.error('MQTT library not loaded. Please check your internet connection.');
                 document.getElementById('connectionStatusText').textContent = 'Error: MQTT library not loaded';
                 return;
             }
 
-            // Default MQTT configuration
+            // Default MQTT broker settings used when form fields are empty
             const defaultConfig = {
                 protocol: 'wss',
                 brokerUrl: 'wss://21c4029e653247699764b7b976972f4f.s1.eu.hivemq.cloud',
@@ -529,14 +556,18 @@
                 topic: 'bdrxr/connectorToWeb'
             };
 
+            // MQTT client instance; set when user connects to broker
             let client = null;
+            // Physio instance that manages Muse connection and EEG processing; created when user clicks Connect to Muse
             let physio = null;
+            // References for Muse device and server (used for disconnect handling)
             let museDevice = null;
             let museServer = null;
+            // Intervals for polling connection status and for batching/sending data; cleared on disconnect or refresh
             let connectionCheckInterval = null;
             let dataProcessingInterval = null;
 
-            // Function to cleanup intervals
+            // Stops the connection-check and data-processing intervals to prevent leaks and duplicate work
             function cleanupIntervals() {
                 if (connectionCheckInterval) {
                     clearInterval(connectionCheckInterval);
@@ -548,7 +579,7 @@
                 }
             }
 
-            // Function to cleanup resources
+            // Disconnects the Muse device and MQTT client and clears all intervals; used on error, close, or page unload
             function cleanupResources() {
                 cleanupIntervals();
                 if (physio) {
@@ -561,7 +592,7 @@
                 }
             }
 
-            // Function to get current MQTT configuration
+            // Reads the connection form values and returns a config object with protocol, full broker URL, port, username, password, topic
             function getMqttConfig() {
                 const protocol = document.getElementById('protocol').value || defaultConfig.protocol;
                 const brokerUrl = document.getElementById('brokerUrl').value || defaultConfig.brokerUrl;
@@ -570,7 +601,7 @@
                 const password = document.getElementById('password').value || defaultConfig.password;
                 const topic = document.getElementById('topic').value || defaultConfig.topic;
 
-                // Construct the full broker URL
+                // Ensure URL has protocol prefix and /mqtt path for WebSocket-based MQTT
                 let fullBrokerUrl = brokerUrl;
                 if (!brokerUrl.startsWith('wss://') && !brokerUrl.startsWith('ws://')) {
                     fullBrokerUrl = `${protocol}://${brokerUrl}`;
@@ -589,7 +620,7 @@
                 };
             }
 
-            // MQTT Connection handling
+            // Creates and configures the MQTT client, connects to the broker, and attaches connect/error/close handlers
             function setupMqttConnection() {
                 const config = getMqttConfig();
                 const options = {
@@ -600,9 +631,9 @@
                     protocol: config.protocol
                 };
 
-                // Initialize MQTT client with the constructed URL
                 client = mqtt.connect(config.brokerUrl, options);
 
+                // On successful connection: update status UI and switch button to "Refresh Connection"
             client.on('connect', () => {
                 document.getElementById('mqttStatus').textContent = 'MQTT: Connected';
                 document.getElementById('mqttStatus').className = 'status connected';
@@ -612,6 +643,7 @@
                     document.getElementById('mqttConnectButton').classList.add('refresh');
             });
 
+                // On error: clean up, show error message, reset button to "Connect to MQTT"
             client.on('error', (error) => {
                     cleanupResources();
                 document.getElementById('mqttStatus').textContent = 'MQTT: Error - ' + error.message;
@@ -622,6 +654,7 @@
                     document.getElementById('mqttConnectButton').classList.remove('refresh');
             });
 
+                // On connection close: same cleanup and UI reset as error
             client.on('close', () => {
                     cleanupResources();
                 document.getElementById('mqttStatus').textContent = 'MQTT: Connection closed';
@@ -633,7 +666,7 @@
                 });
             }
 
-            // Add click handler for MQTT connect/refresh button
+            // Connect to MQTT when disconnected; when already connected, refresh by disconnecting and reconnecting after a short delay
             document.getElementById('mqttConnectButton').addEventListener('click', async () => {
                 if (!client || !client.connected) {
                     setupMqttConnection();
@@ -654,7 +687,7 @@
                 }
             });
 
-            // Muse connection handling
+            // When user clicks Connect to Muse: require MQTT first, then create Physio, start BCI device, and run intervals for status and data publishing
             document.getElementById('connectButton').addEventListener('click', async () => {
                 if (!client || !client.connected) {
                     alert('Please connect to MQTT first');
@@ -667,13 +700,10 @@
 
                     document.getElementById('connectionStatusText').textContent = 'Searching for Muse...';
 
-                    // Initialize Physio instance
                     physio = new Physio();
-
-                    // Start the BCI device connection
                     physio.start();
 
-                    // Wait for data to start flowing before showing connected status
+                    // Poll until global band data and relative beta are available, then show "Streaming Data..." and stop polling
                     connectionCheckInterval = setInterval(() => {
                         if (window.relativeBeta !== undefined && window.bands && Object.keys(window.bands).length > 0) {
                     document.getElementById('museStatus').textContent = 'Muse: Connected';
@@ -684,24 +714,23 @@
                         }
                     }, 100);
 
-                    // Set up an interval to check and send the processed data
+                    // Throttle MQTT publishes and DOM updates using elapsed time since last run
                     let lastMqttUpdateTime = 0;
                     let lastDomUpdateTime = 0;
-                    const MQTT_UPDATE_INTERVAL = 100; // Send once per second
-                    const DOM_UPDATE_INTERVAL = 500; // Update DOM every 500ms
+                    const MQTT_UPDATE_INTERVAL = 100;  // Publish to MQTT at most every 100ms
+                    const DOM_UPDATE_INTERVAL = 500;  // Refresh the "Latest Data" section at most every 500ms
 
-                    // Interval for sending data and updating display
+                    // Every 100ms: optionally publish buffered samples and processed data to MQTT, and optionally refresh the data display
                     dataProcessingInterval = setInterval(() => {
                         try {
                             const currentTime = Date.now();
 
-                            // Send samples to MQTT once per second
+                            // If enough time has passed since last publish, send buffered raw samples and processed data to MQTT
                             if (currentTime - lastMqttUpdateTime >= MQTT_UPDATE_INTERVAL) {
-                                // Get all samples from physio
                                 const rawDataBuffer = physio.getRawDataBuffer();
-                                
+
                                 if (rawDataBuffer.length > 0) {
-                                    // Create a batch of all samples
+                                    // Build one MQTT message containing batch timestamp, sample count, raw samples, and processed band/power data
                                     const batchData = {
                                         batchTimestamp: new Date().toISOString(),
                                         sampleCount: rawDataBuffer.length,
@@ -717,15 +746,13 @@
                                     client.publish(getMqttConfig().topic, message);
                                     console.log(`MQTT: Sent ${rawDataBuffer.length} samples`);
                                     lastMqttUpdateTime = currentTime;
-                                    
-                                    // Clear the buffer after sending
                                     physio.clearRawDataBuffer();
                                 } else {
                                     console.log('No samples in buffer to send');
                                 }
                             }
 
-                            // Update DOM with the latest processed data
+                            // If enough time has passed, refresh the "Latest Data" section with current relative beta and band powers
                             if (currentTime - lastDomUpdateTime >= DOM_UPDATE_INTERVAL) {
                                 const betaValue = window.relativeBeta;
                                 const bands = window.bands;
@@ -735,7 +762,6 @@
                                     const formatBandValue = (value) => {
                                         return value !== undefined ? value.toFixed(4) : 'N/A';
                                     };
-
                                     const hasValidBands = bands && Object.keys(bands).length > 0;
                                     const allChannelsReady = window.isChannelDataReady &&
                                         window.isChannelDataReady[2] &&
@@ -795,7 +821,7 @@
                         } catch (error) {
                             console.error('Error processing data:', error);
                         }
-                    }, 100); // Check every 100ms for sending/display updates
+                    }, 100);
 
                 } catch (error) {
                     console.error('Connection error:', error);
@@ -805,7 +831,7 @@
                 }
             });
 
-            // Update the latest data display with better formatting
+            // Renders the "Latest Data" section: builds HTML for timestamp, relative beta, power value, and band powers for tp9, tp10, af7, af8
             function updateLatestData(type, data) {
                 try {
                 const latestData = document.getElementById('latestData');
@@ -939,7 +965,7 @@
                 }
             }
 
-            // Handle device disconnection
+            // When the Muse headset disconnects (e.g. out of range), update status and clean up (museDevice may be null on first load)
             if (museDevice) {
                 museDevice.addEventListener('gattserverdisconnected', () => {
                     document.getElementById('museStatus').textContent = 'Muse: Disconnected';
@@ -948,7 +974,7 @@
                 });
             }
 
-            // Clean up on page unload
+            // Disconnect MQTT and Muse and clear intervals when the user leaves or closes the page
             window.addEventListener('beforeunload', () => {
                 cleanupResources();
             });
