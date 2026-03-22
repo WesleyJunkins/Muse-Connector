@@ -164,7 +164,8 @@ var Physio = function () {
    * (1) Average relative beta across TP9, TP10, AF7, AF8 (alertness/active thinking),
    * (2) Theta/beta component: beta/(theta+beta) averaged across channels (lower theta vs beta = more focus),
    * (3) Alpha blocking: 1 - average relative alpha (lower alpha when mentally engaged).
-   * Sets window.relativeBeta to this score (used as powerValue * 100 in UI/MQTT) and window.focusComponents.
+   * Sets window.relativeBeta to this score (used as powerValue * 100 in UI/MQTT) and window.focusComponents
+   * (avgRelativeBeta is stored as 0–100; other components remain 0–1).
    */
   var computeFocusScore = function () {
     if (!window.bands || !window.bands.tp9 || !window.bands.tp10 || !window.bands.af7 || !window.bands.af8) {
@@ -183,7 +184,7 @@ var Physio = function () {
     var thetaBetaComponent = sumThetaBeta / 4;
     var alphaBlockingComponent = 1 - (sumAlpha / 4);
     window.focusComponents = {
-      avgRelativeBeta: avgRelativeBeta,
+      avgRelativeBeta: avgRelativeBeta * 100,
       thetaBetaComponent: thetaBetaComponent,
       alphaBlockingComponent: alphaBlockingComponent
     };

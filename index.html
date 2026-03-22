@@ -106,6 +106,16 @@
             padding-bottom: 10px;
         }
 
+        /* <pre> defaults break grid/flex layouts; normalize so injected HTML wraps inside the card */
+        #latestData {
+            white-space: normal;
+            margin: 0;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            overflow-x: auto;
+        }
+
         .data-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -122,9 +132,11 @@
         .data-section.basic-info {
             grid-column: 1 / -1;
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+            gap: 16px;
             padding: 20px;
+            min-width: 0;
+            box-sizing: border-box;
         }
 
         .data-section.basic-info .data-section-title {
@@ -146,6 +158,9 @@
             align-items: center;
             text-align: center;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
         }
 
         .data-section.basic-info .data-item:hover {
@@ -159,12 +174,18 @@
             margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            overflow-wrap: anywhere;
+            hyphens: auto;
+            max-width: 100%;
         }
 
         .data-section.basic-info .data-value {
             font-size: 1.4em;
             color: var(--primary-color);
             font-weight: 600;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            max-width: 100%;
         }
 
         @media (max-width: 768px) {
@@ -750,7 +771,7 @@
                                         sampleCount: rawDataBuffer.length,
                                         samples: rawDataBuffer,
                                         processedData: {
-                                            relativeBeta: window.relativeBeta,
+                                            relativeBeta: parseFloat((window.relativeBeta * 100).toFixed(3)),
                                             powerValue: (window.relativeBeta * 100).toFixed(3),
                                             threshold: getMqttThresholdValue(),
                                             focusComponents: window.focusComponents || null,
@@ -792,7 +813,7 @@
                                     const thresholdVal = getMqttThresholdValue();
                                     const displayData = {
                                         timestamp: new Date().toISOString(),
-                                        relativeBeta: focusScore.toFixed(4),
+                                        relativeBeta: (focusScore * 100).toFixed(3),
                                         powerValue: powerValue,
                                         threshold: thresholdVal !== null ? thresholdVal.toFixed(3) : '—',
                                         focusComponents: window.focusComponents || null,
@@ -868,8 +889,12 @@
                                     <span class="data-value">${data.timestamp}</span>
                                 </div>
                                 <div class="data-item">
-                                    <span class="data-label">Focus score (0-1)</span>
-                                    <span class="data-value">${data.relativeBeta}</span>
+                                    <span class="data-label">Relative beta (composite, 0–100)</span>
+                                    <span class="data-value">${data.relativeBeta}%</span>
+                                </div>
+                                <div class="data-item">
+                                    <span class="data-label">Relative beta (average across channels)</span>
+                                    <span class="data-value">${data.focusComponents && data.focusComponents.avgRelativeBeta != null ? data.focusComponents.avgRelativeBeta.toFixed(3) + '%' : 'N/A'}</span>
                                 </div>
                                 <div class="data-item">
                                     <span class="data-label">Focus % (powerValue)</span>
@@ -879,7 +904,7 @@
                                     <span class="data-label">Threshold (sent on MQTT)</span>
                                     <span class="data-value">${data.threshold === '—' ? '—' : data.threshold + '%'}</span>
                                 </div>
-                                ${data.focusComponents ? '<div class="data-item"><span class="data-label">Avg relative beta</span><span class="data-value">' + (data.focusComponents.avgRelativeBeta != null ? data.focusComponents.avgRelativeBeta.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Theta/beta component</span><span class="data-value">' + (data.focusComponents.thetaBetaComponent != null ? data.focusComponents.thetaBetaComponent.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Alpha blocking</span><span class="data-value">' + (data.focusComponents.alphaBlockingComponent != null ? data.focusComponents.alphaBlockingComponent.toFixed(4) : 'N/A') + '</span></div>' : ''}
+                                ${data.focusComponents ? '<div class="data-item"><span class="data-label">Theta/beta component</span><span class="data-value">' + (data.focusComponents.thetaBetaComponent != null ? data.focusComponents.thetaBetaComponent.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Alpha blocking</span><span class="data-value">' + (data.focusComponents.alphaBlockingComponent != null ? data.focusComponents.alphaBlockingComponent.toFixed(4) : 'N/A') + '</span></div>' : ''}
                             </div>
                             <div class="data-section">
                                 <div class="data-section-title">TP9</div>
