@@ -492,6 +492,10 @@
                 <label for="topic">Topic:</label>
                 <input type="text" id="topic" placeholder="bdrxr/connectorToWeb">
             </div>
+            <div class="config-item">
+                <label for="mqttThreshold">Threshold</label>
+                <input type="number" id="mqttThreshold" min="0" max="100" step="0.1" placeholder="Compare to focus % (powerValue)">
+            </div>
         </div>
         <!-- Connect to MQTT first; then Connect to Muse to start streaming EEG to the broker -->
         <div class="button-container">
@@ -577,6 +581,16 @@
                     clearInterval(dataProcessingInterval);
                     dataProcessingInterval = null;
                 }
+            }
+
+            /** Numeric threshold from the UI for MQTT processedData; null if empty or invalid. */
+            function getMqttThresholdValue() {
+                const el = document.getElementById('mqttThreshold');
+                if (!el) return null;
+                const raw = String(el.value).trim();
+                if (raw === '') return null;
+                const n = parseFloat(raw);
+                return Number.isNaN(n) ? null : n;
             }
 
             // Disconnects the Muse device and MQTT client and clears all intervals; used on error, close, or page unload
@@ -738,6 +752,7 @@
                                         processedData: {
                                             relativeBeta: window.relativeBeta,
                                             powerValue: (window.relativeBeta * 100).toFixed(3),
+                                            threshold: getMqttThresholdValue(),
                                             focusComponents: window.focusComponents || null,
                                             bands: window.bands
                                         }
@@ -774,10 +789,12 @@
                                         document.getElementById('connectionStatusText').textContent = 'Streaming Data';
                                     }
 
+                                    const thresholdVal = getMqttThresholdValue();
                                     const displayData = {
                                         timestamp: new Date().toISOString(),
                                         relativeBeta: focusScore.toFixed(4),
                                         powerValue: powerValue,
+                                        threshold: thresholdVal !== null ? thresholdVal.toFixed(3) : '—',
                                         focusComponents: window.focusComponents || null,
                                         bands: hasValidBands ? {
                                             tp9: {
@@ -857,6 +874,10 @@
                                 <div class="data-item">
                                     <span class="data-label">Focus % (powerValue)</span>
                                     <span class="data-value">${data.powerValue}%</span>
+                                </div>
+                                <div class="data-item">
+                                    <span class="data-label">Threshold (sent on MQTT)</span>
+                                    <span class="data-value">${data.threshold === '—' ? '—' : data.threshold + '%'}</span>
                                 </div>
                                 ${data.focusComponents ? '<div class="data-item"><span class="data-label">Avg relative beta</span><span class="data-value">' + (data.focusComponents.avgRelativeBeta != null ? data.focusComponents.avgRelativeBeta.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Theta/beta component</span><span class="data-value">' + (data.focusComponents.thetaBetaComponent != null ? data.focusComponents.thetaBetaComponent.toFixed(4) : 'N/A') + '</span></div><div class="data-item"><span class="data-label">Alpha blocking</span><span class="data-value">' + (data.focusComponents.alphaBlockingComponent != null ? data.focusComponents.alphaBlockingComponent.toFixed(4) : 'N/A') + '</span></div>' : ''}
                             </div>
